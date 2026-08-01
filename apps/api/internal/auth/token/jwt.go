@@ -9,11 +9,16 @@ import (
 
 var ErrInvalidToken = errors.New("invalid or expired token")
 
+const (
+	Issuer   = "enterprise-api"
+	Audience = "enterprise-api"
+)
+
 type Claims struct {
-	UserID   string `json:"UserID"`
-	Email    string `json:"Email"`
-	FullName string `json:"FullName"`
-	Role     string `json:"Role"`
+	UserID   string `json:"user_id"`
+	Email    string `json:"email"`
+	FullName string `json:"full_name"`
+	Role     string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -22,7 +27,10 @@ type Manager struct {
 	AccessTokenTTL time.Duration
 }
 
-func NewManager(secretKey string, accessTokenTTL time.Duration) *Manager {
+func NewManager(
+	secretKey string,
+	accessTokenTTL time.Duration,
+) *Manager {
 	return &Manager{
 		SecretKey:      secretKey,
 		AccessTokenTTL: accessTokenTTL,
@@ -43,6 +51,8 @@ func (m *Manager) GenerateAccessToken(
 		FullName: fullName,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    Issuer,
+			Audience:  jwt.ClaimStrings{Audience},
 			Subject:   userID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(m.AccessTokenTTL)),
@@ -81,6 +91,15 @@ func (m *Manager) ValidateAccessToken(
 	}
 
 	if !parsedToken.Valid {
+		return nil, ErrInvalidToken
+	}
+
+	if claims.Issuer != Issuer {
+		return nil, ErrInvalidToken
+	}
+
+	if len(claims.Audience) == 0 ||
+		claims.Audience[0] != Audience {
 		return nil, ErrInvalidToken
 	}
 
