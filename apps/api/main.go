@@ -4,11 +4,14 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	authhandler "enterprise-core/api/internal/auth/handler"
 	authrepository "enterprise-core/api/internal/auth/repository"
 	authservice "enterprise-core/api/internal/auth/service"
+	"enterprise-core/api/internal/auth/token"
 	"enterprise-core/api/internal/cache"
 	"enterprise-core/api/internal/config"
 	"enterprise-core/api/internal/database"
@@ -20,61 +23,114 @@ func main() {
 	cfg := config.Load()
 	ctx := context.Background()
 
-	// PostgreSQL bağlantısı
-	db, err := database.Connect(ctx, cfg.DatabaseURL)
+	db, err := database.Connect(
+		ctx,
+		cfg.DatabaseURL,
+	)
 	if err != nil {
-		log.Fatalf("database connection failed: %v", err)
+		log.Fatalf(
+			"database connection failed: %v",
+			err,
+		)
 	}
 	defer db.Close()
 
-	// Redis bağlantısı
-	redisClient, err := cache.Connect(ctx, cfg.RedisURL)
+	redisClient, err := cache.Connect(
+		ctx,
+		cfg.RedisURL,
+	)
 	if err != nil {
-		log.Fatalf("redis connection failed: %v", err)
+		log.Fatalf(
+			"redis connection failed: %v",
+			err,
+		)
 	}
 	defer redisClient.Close()
 
-	// Health handler
 	healthHandler := health.Handler{
 		DB:    db,
 		Redis: redisClient,
 	}
 
-	// User repository
-	userRepository := authrepository.NewRepository(db)
+	userRepository := authrepository.NewRepository(
+		db,
+	)
 
-	// Auth service
-	authService := authservice.NewService(userRepository)
+	jwtSecret := os.Getenv("JWT_SECRET")
 
-	// Auth handler
-	authHandler := authhandler.NewAuthHandler(authService)
+	if jwtSecret == "" {
+		jwtSecret = "enterprise-core-development-secret-change-this"
 
-	// HTTP Router
+		log.Println(
+			"WARNING: JWT_SECRET is not set. Using development secret.",
+		)
+	}
+
+	accessTokenTTL := 24 * time.Hour
+
+	if ttlMinutes := os.Getenv(
+		"JWT_ACCESS_TOKEN_TTL_MINUTES",
+	); ttlMinutes != "" {
+		if minutes, err := strconv.Atoi(
+			ttlMinutes,
+		); err == nil && minutes > 0 {
+			accessTokenTTL = time.Duration(
+				minutes,
+			) * time.Minute
+		}
+	}
+
+	tokenManager := token.NewManager(
+		jwtSecret,
+		accessTokenTTL,
+	)
+
+	authService := authservice.NewService(
+		userRepository,
+		tokenManager,
+	)
+
+	authHandler := authhandler.NewAuthHandler(
+		authService,
+	)
+
 	router := apihttp.NewRouter(
 		healthHandler,
 		authHandler,
+		tokenManager,
 	)
 
-	// HTTP Server
 	server := &http.Server{
-		Addr:              ":" + cfg.APIPort,
+		Addr:              "0.0.0.0:" + cfg.APIPort,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	log.Printf(
-		"Enterprise API running on http://localhost:%s",
+		"Enterprise API starting on 0.0.0.0:%s",
 		cfg.APIPort,
 	)
 
 	log.Printf(
-		"Health check: http://localhost:%s/health",
+		"Health check endpoint: http://localhost:%s/health",
 		cfg.APIPort,
 	)
 
-	// Server başlat
+	log.Printf(
+		"API login endpoint: http://localhost:%s/auth/login",
+		cfg.APIPort,
+	)
+
+	log.Printf(
+		"API me endpoint: http://localhost:%s/auth/me",
+		cfg.APIPort,
+	)
+
 	if err := server.ListenAndServe(); err != nil &&
 		err != http.ErrServerClosed {
-		log.Fatalf("server failed: %v", err)
+		log.Fatalf(
+			"server failed: %v",
+			err,
+		)
 	}
 }
