@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"enterprise-core/api/internal/auth/repository"
+	"enterprise-core/api/internal/auth/session"
 	"enterprise-core/api/internal/auth/token"
 )
 
@@ -32,17 +33,20 @@ type LoginRequest struct {
 }
 
 type Service struct {
-	Users        *repository.Repository
-	TokenManager *token.Manager
+	Users          *repository.Repository
+	TokenManager   *token.Manager
+	SessionManager *session.Manager
 }
 
 func NewService(
 	users *repository.Repository,
 	tokenManager *token.Manager,
+	sessionManager *session.Manager,
 ) *Service {
 	return &Service{
-		Users:        users,
-		TokenManager: tokenManager,
+		Users:          users,
+		TokenManager:   tokenManager,
+		SessionManager: sessionManager,
 	}
 }
 
@@ -133,4 +137,64 @@ func (s *Service) Login(
 	}
 
 	return user, accessToken, nil
+}
+
+func (s *Service) CreateRefreshSession(
+	ctx context.Context,
+	user *repository.User,
+) (string, *session.Session, error) {
+	if s.SessionManager == nil {
+		return "", nil, errors.New("session manager is not configured")
+	}
+
+	refreshToken, createdSession, err := s.SessionManager.CreateSession(
+		ctx,
+		user.ID,
+		user.Email,
+		user.FullName,
+		user.Role,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf(
+			"create session: %w",
+			err,
+		)
+	}
+
+	return refreshToken, createdSession, nil
+}
+func (s *Service) RefreshAccessToken(
+	ctx context.Context,
+	refreshToken string,
+) (string, string, *session.Session, error) {
+	if s.SessionManager == nil {
+		return "", "", nil, errors.New("session manager is not configured")
+	}
+
+	newRefreshToken, newSession, err := s.SessionManager.RotateSession(
+		ctx,
+		refreshToken,
+	)
+	if err != nil {
+		return "", "", nil, fmt.Errorf(
+			"rotate session: %w",
+			err,
+		)
+	}
+
+	accessToken, err := s.TokenManager.GenerateAccessToken(
+		newSession.UserID,
+		newSession.Email,
+		newSession.FullName,
+		newSession.Role,
+	)
+	if err != nil {
+		return "", "", nil, fmt.Errorf(
+			"%w: %v",
+			ErrTokenGeneration,
+			err,
+		)
+	}
+
+	return accessToken, newRefreshToken, newSession, nil
 }

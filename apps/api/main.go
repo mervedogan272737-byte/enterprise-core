@@ -11,6 +11,7 @@ import (
 	authhandler "enterprise-core/api/internal/auth/handler"
 	authrepository "enterprise-core/api/internal/auth/repository"
 	authservice "enterprise-core/api/internal/auth/service"
+	authsession "enterprise-core/api/internal/auth/session"
 	"enterprise-core/api/internal/auth/token"
 	"enterprise-core/api/internal/cache"
 	"enterprise-core/api/internal/config"
@@ -22,35 +23,20 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf(
-			"configuration error: %v",
-			err,
-		)
+		log.Fatalf("configuration error: %v", err)
 	}
 
 	ctx := context.Background()
 
-	db, err := database.Connect(
-		ctx,
-		cfg.DatabaseURL,
-	)
+	db, err := database.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf(
-			"database connection failed: %v",
-			err,
-		)
+		log.Fatalf("database connection failed: %v", err)
 	}
 	defer db.Close()
 
-	redisClient, err := cache.Connect(
-		ctx,
-		cfg.RedisURL,
-	)
+	redisClient, err := cache.Connect(ctx, cfg.RedisURL)
 	if err != nil {
-		log.Fatalf(
-			"redis connection failed: %v",
-			err,
-		)
+		log.Fatalf("redis connection failed: %v", err)
 	}
 	defer redisClient.Close()
 
@@ -59,21 +45,20 @@ func main() {
 		Redis: redisClient,
 	}
 
-	userRepository := authrepository.NewRepository(
-		db,
-	)
+	userRepository := authrepository.NewRepository(db)
 
 	accessTokenTTL := 24 * time.Hour
+	refreshTokenTTL := 30 * 24 * time.Hour
 
-	if ttlMinutes := os.Getenv(
-		"JWT_ACCESS_TOKEN_TTL_MINUTES",
-	); ttlMinutes != "" {
-		if minutes, err := strconv.Atoi(
-			ttlMinutes,
-		); err == nil && minutes > 0 {
-			accessTokenTTL = time.Duration(
-				minutes,
-			) * time.Minute
+	if ttlMinutes := os.Getenv("JWT_ACCESS_TOKEN_TTL_MINUTES"); ttlMinutes != "" {
+		if minutes, err := strconv.Atoi(ttlMinutes); err == nil && minutes > 0 {
+			accessTokenTTL = time.Duration(minutes) * time.Minute
+		}
+	}
+
+	if ttlDays := os.Getenv("JWT_REFRESH_TOKEN_TTL_DAYS"); ttlDays != "" {
+		if days, err := strconv.Atoi(ttlDays); err == nil && days > 0 {
+			refreshTokenTTL = time.Duration(days) * 24 * time.Hour
 		}
 	}
 
@@ -82,9 +67,15 @@ func main() {
 		accessTokenTTL,
 	)
 
+	sessionManager := authsession.NewManager(
+		redisClient,
+		refreshTokenTTL,
+	)
+
 	authService := authservice.NewService(
 		userRepository,
 		tokenManager,
+		sessionManager,
 	)
 
 	authHandler := authhandler.NewAuthHandler(
@@ -119,15 +110,22 @@ func main() {
 	)
 
 	log.Printf(
+		"API refresh endpoint: http://localhost:%s/auth/refresh",
+		cfg.APIPort,
+	)
+
+	log.Printf(
+		"API logout endpoint: http://localhost:%s/auth/logout",
+		cfg.APIPort,
+	)
+
+	log.Printf(
 		"API me endpoint: http://localhost:%s/auth/me",
 		cfg.APIPort,
 	)
 
 	if err := server.ListenAndServe(); err != nil &&
 		err != http.ErrServerClosed {
-		log.Fatalf(
-			"server failed: %v",
-			err,
-		)
+		log.Fatalf("server failed: %v", err)
 	}
 }
