@@ -121,3 +121,7 @@ func ClaimsFromContext(
 
 	return claims, true
 }
+
+func ClaimsContextKeyForTest() interface{} {
+	return claimsContextKey
+}
