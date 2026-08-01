@@ -6,12 +6,30 @@ type RefreshResponse = {
   refresh_token: string;
 };
 
-function getAccessToken() {
+function getAccessToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
   return localStorage.getItem("accessToken");
 }
 
-function getRefreshToken() {
+function getRefreshToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
   return localStorage.getItem("refreshToken");
+}
+
+function clearAuthStorage(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  localStorage.removeItem("accessToken");
+  localStorage.removeItem("refreshToken");
+  localStorage.removeItem("user");
 }
 
 async function refreshAccessToken(): Promise<string | null> {
@@ -21,30 +39,32 @@ async function refreshAccessToken(): Promise<string | null> {
     return null;
   }
 
-  const response = await fetch(`${API_URL}/auth/refresh`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      refreshToken,
-    }),
-  });
+  try {
+    const response = await fetch(`${API_URL}/auth/refresh`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        refreshToken,
+      }),
+    });
 
-  if (!response.ok) {
-    localStorage.removeItem("accessToken");
-    localStorage.removeItem("refreshToken");
-    localStorage.removeItem("user");
+    if (!response.ok) {
+      clearAuthStorage();
+      return null;
+    }
 
+    const data: RefreshResponse = await response.json();
+
+    localStorage.setItem("accessToken", data.access_token);
+    localStorage.setItem("refreshToken", data.refresh_token);
+
+    return data.access_token;
+  } catch {
+    clearAuthStorage();
     return null;
   }
-
-  const data: RefreshResponse = await response.json();
-
-  localStorage.setItem("accessToken", data.access_token);
-  localStorage.setItem("refreshToken", data.refresh_token);
-
-  return data.access_token;
 }
 
 export async function apiFetch(
@@ -55,7 +75,9 @@ export async function apiFetch(
 
   const headers = new Headers(init.headers);
 
-  headers.set("Content-Type", "application/json");
+  if (!headers.has("Content-Type") && init.body) {
+    headers.set("Content-Type", "application/json");
+  }
 
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
@@ -86,4 +108,7 @@ export async function apiFetch(
   return response;
 }
 
-export { API_URL, refreshAccessToken };
+export {
+  API_URL,
+  refreshAccessToken,
+};
