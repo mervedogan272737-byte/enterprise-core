@@ -18,21 +18,17 @@ func (h Handler) All(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
-	dbOK := h.DB.Ping(ctx) == nil
-	redisOK := h.Redis.Ping(ctx).Err() == nil
-
-	status := http.StatusOK
-	if !dbOK || !redisOK {
-		status = http.StatusServiceUnavailable
-	}
+	dbOK := h.DB != nil && h.DB.Ping(ctx) == nil
+	redisOK := h.Redis != nil && h.Redis.Ping(ctx).Err() == nil
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
 
-	if dbOK && redisOK {
-		w.Write([]byte(`{"status":"ok","service":"enterprise-api","database":"ok","redis":"ok"}`))
+	if !dbOK || !redisOK {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"degraded","service":"enterprise-api","database":"check","redis":"check"}`))
 		return
 	}
 
-	w.Write([]byte(`{"status":"degraded","service":"enterprise-api","database":"check","redis":"check"}`))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok","service":"enterprise-api","database":"ok","redis":"ok"}`))
 }
