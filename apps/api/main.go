@@ -20,7 +20,14 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf(
+			"configuration error: %v",
+			err,
+		)
+	}
+
 	ctx := context.Background()
 
 	db, err := database.Connect(
@@ -56,16 +63,6 @@ func main() {
 		db,
 	)
 
-	jwtSecret := os.Getenv("JWT_SECRET")
-
-	if jwtSecret == "" {
-		jwtSecret = "enterprise-core-development-secret-change-this"
-
-		log.Println(
-			"WARNING: JWT_SECRET is not set. Using development secret.",
-		)
-	}
-
 	accessTokenTTL := 24 * time.Hour
 
 	if ttlMinutes := os.Getenv(
@@ -81,7 +78,7 @@ func main() {
 	}
 
 	tokenManager := token.NewManager(
-		jwtSecret,
+		cfg.JWTSecret,
 		accessTokenTTL,
 	)
 
