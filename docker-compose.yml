@@ -60,6 +60,7 @@ services:
       DATABASE_URL: postgres://enterprise_user:enterprise_password@postgres:5432/enterprise_db?sslmode=disable
       REDIS_URL: redis://redis:6379
       CORS_ORIGINS: http://localhost:3000
+      JWT_SECRET: enterprise-core-dev-secret-change-this-before-production
 
     ports:
       - "8080:8080"

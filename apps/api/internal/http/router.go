@@ -42,6 +42,14 @@ func NewRouter(
 				"/me",
 				authHandler.Me,
 			)
+
+			r.With(
+				authmiddleware.JWTAuth(tokenManager),
+				authmiddleware.RequireRole("admin"),
+			).Get(
+				"/admin/me",
+				authHandler.AdminMe,
+			)
 		},
 	)
 

@@ -228,3 +228,37 @@ func (h *AuthHandler) Me(
 
 	_ = json.NewEncoder(w).Encode(response)
 }
+
+func (h *AuthHandler) AdminMe(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	claims, ok := middleware.ClaimsFromContext(
+		r.Context(),
+	)
+
+	if !ok {
+		http.Error(
+			w,
+			"unauthorized",
+			http.StatusUnauthorized,
+		)
+		return
+	}
+
+	response := meResponse{
+		ID:       claims.UserID,
+		Email:    claims.Email,
+		FullName: claims.FullName,
+		Role:     claims.Role,
+	}
+
+	w.Header().Set(
+		"Content-Type",
+		"application/json; charset=utf-8",
+	)
+
+	w.WriteHeader(http.StatusOK)
+
+	_ = json.NewEncoder(w).Encode(response)
+}

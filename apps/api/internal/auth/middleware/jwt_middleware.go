@@ -77,6 +77,37 @@ func JWTAuth(tokenManager *token.Manager) func(http.Handler) http.Handler {
 	}
 }
 
+func RequireRole(requiredRole string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := ClaimsFromContext(r.Context())
+
+			if !ok {
+				http.Error(
+					w,
+					"unauthorized",
+					http.StatusUnauthorized,
+				)
+				return
+			}
+
+			if !strings.EqualFold(
+				strings.TrimSpace(claims.Role),
+				strings.TrimSpace(requiredRole),
+			) {
+				http.Error(
+					w,
+					"forbidden",
+					http.StatusForbidden,
+				)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func ClaimsFromContext(
 	ctx context.Context,
 ) (*token.Claims, bool) {
