@@ -76,3 +76,25 @@ func TestRequireRole_RejectsUser(t *testing.T) {
 		)
 	}
 }
+
+func TestRequireRole_RejectsMissingClaims(t *testing.T) {
+	handler := RequireRole("admin")(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusUnauthorized,
+			rec.Code,
+		)
+	}
+}
