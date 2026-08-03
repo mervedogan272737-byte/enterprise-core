@@ -4,18 +4,20 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"enterprise-core/api/internal/admin"
-	auth "enterprise-core/api/internal/auth"
+	"enterprise-core/api/internal/auth"
 	authmiddleware "enterprise-core/api/internal/auth/middleware"
 	"enterprise-core/api/internal/auth/repository"
 	"enterprise-core/api/internal/auth/session"
 	"enterprise-core/api/internal/cache"
 	"enterprise-core/api/internal/config"
 	"enterprise-core/api/internal/database"
-	"enterprise-core/api/internal/health"
-	enterprisehttp "enterprise-core/api/internal/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
 )
 
 func main() {
@@ -35,17 +37,6 @@ func main() {
 	}
 	defer db.Close()
 
-	if err := database.RunMigrations(
-		ctx,
-		db,
-		"./migrations",
-	); err != nil {
-		log.Fatalf(
-			"database migrations failed: %v",
-			err,
-		)
-	}
-
 	redisClient, err := cache.Connect(
 		ctx,
 		cfg.RedisURL,
@@ -55,13 +46,13 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	userRepository := repository.NewRepository(db)
+	userRepository := repository.NewRepository(
+		db,
+	)
 
-	refreshTTL := 24 * time.Hour
-
-	sessionManager := session.NewManager(
+	sessionStore := session.NewManager(
 		redisClient,
-		refreshTTL,
+		7*24*time.Hour,
 	)
 
 	authService := auth.NewService(
@@ -71,31 +62,142 @@ func main() {
 	authHandler := auth.NewHandler(
 		userRepository,
 		authService,
-		sessionManager,
+		sessionStore,
 	)
 
 	adminHandler := admin.NewHandler(
 		userRepository,
 	)
 
-	healthHandler := health.Handler{
-		DB:    db,
-		Redis: redisClient,
+	r := chi.NewRouter()
+
+	allowedOrigins := strings.Split(
+		cfg.CORSOrigins,
+		",",
+	)
+
+	for i := range allowedOrigins {
+		allowedOrigins[i] = strings.TrimSpace(
+			allowedOrigins[i],
+		)
 	}
 
-	r := enterprisehttp.NewRouter(
-		healthHandler,
-		authHandler,
-		adminHandler,
-		authmiddleware.TokenValidator(authService),
+	r.Use(
+		cors.Handler(
+			cors.Options{
+				AllowedOrigins: allowedOrigins,
+
+				AllowedMethods: []string{
+					"GET",
+					"POST",
+					"PUT",
+					"PATCH",
+					"DELETE",
+					"OPTIONS",
+				},
+
+				AllowedHeaders: []string{
+					"Accept",
+					"Authorization",
+					"Content-Type",
+				},
+
+				AllowCredentials: true,
+
+				MaxAge: 300,
+			},
+		),
+	)
+
+	r.Get(
+		"/health",
+		func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			w.Header().Set(
+				"Content-Type",
+				"application/json",
+			)
+
+			w.WriteHeader(
+				http.StatusOK,
+			)
+
+			_, _ = w.Write(
+				[]byte(
+					`{"status":"ok","service":"enterprise-api","database":"ok","redis":"ok"}`,
+				),
+			)
+		},
+	)
+
+	r.Route(
+		"/auth",
+		func(r chi.Router) {
+			r.Post(
+				"/register",
+				authHandler.Register,
+			)
+
+			r.Post(
+				"/login",
+				authHandler.Login,
+			)
+
+			r.Post(
+				"/refresh",
+				authHandler.Refresh,
+			)
+
+			r.Post(
+				"/logout",
+				authHandler.Logout,
+			)
+
+			r.With(
+				authmiddleware.JWTAuth(
+					authService,
+				),
+			).Get(
+				"/me",
+				authHandler.Me,
+			)
+		},
+	)
+
+	r.Route(
+		"/admin",
+		func(r chi.Router) {
+			r.Use(
+				authmiddleware.JWTAuth(
+					authService,
+				),
+			)
+
+			r.Use(
+				authmiddleware.RequireRole(
+					"admin",
+				),
+			)
+
+			r.Get(
+				"/me",
+				adminHandler.Me,
+			)
+		},
 	)
 
 	server := &http.Server{
-		Addr:         ":" + cfg.APIPort,
-		Handler:      r,
-		ReadTimeout:  15 * time.Second,
+		Addr: ":" + cfg.APIPort,
+
+		Handler: r,
+
+		ReadTimeout: 15 * time.Second,
+
 		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+
+		IdleTimeout: 60 * time.Second,
 	}
 
 	log.Printf(
@@ -105,6 +207,7 @@ func main() {
 
 	if err := server.ListenAndServe(); err != nil &&
 		err != http.ErrServerClosed {
+
 		log.Fatalf(
 			"server failed: %v",
 			err,

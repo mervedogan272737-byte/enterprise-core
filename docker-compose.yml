@@ -8,33 +8,32 @@
       POSTGRES_PASSWORD: enterprise_password
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test:
         - CMD-SHELL
         - pg_isready -U enterprise_user -d enterprise_db
-      timeout: 5s
       interval: 5s
+      timeout: 5s
       retries: 10
 
   redis:
     container_name: enterprise-redis
     image: redis:8
+    ports:
+      - "6380:6379"
     healthcheck:
       test:
         - CMD
         - redis-cli
         - ping
-      timeout: 5s
       interval: 5s
+      timeout: 5s
       retries: 10
 
   api:
     container_name: enterprise-api
     build:
       context: ./apps/api
-      dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:
@@ -49,6 +48,3 @@
         condition: service_healthy
       redis:
         condition: service_healthy
-
-volumes:
-  postgres_data:

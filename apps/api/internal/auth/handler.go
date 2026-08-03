@@ -2,12 +2,15 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+
 	authmiddleware "enterprise-core/api/internal/auth/middleware"
 	"enterprise-core/api/internal/auth/repository"
 	"enterprise-core/api/internal/auth/session"
 	"enterprise-core/api/internal/response"
-	"net/http"
-	"strings"
+
 	"time"
 )
 
@@ -18,9 +21,11 @@ type Handler struct {
 }
 
 type registerRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	FullName string `json:"full_name"`
+	Email            string `json:"email"`
+	Password         string `json:"password"`
+	FullName         string `json:"full_name"`
+	OrganizationName string `json:"organization_name"`
+	OrganizationSlug string `json:"organization_slug"`
 }
 
 type loginRequest struct {
@@ -54,37 +59,85 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	req.FullName = strings.TrimSpace(req.FullName)
+	req.OrganizationName = strings.TrimSpace(req.OrganizationName)
+	req.OrganizationSlug = strings.ToLower(
+		strings.TrimSpace(req.OrganizationSlug),
+	)
 
-	if req.Email == "" || req.Password == "" {
-		response.Error(w, http.StatusBadRequest, "email and password are required")
+	if req.Email == "" ||
+		req.Password == "" ||
+		req.FullName == "" ||
+		req.OrganizationName == "" ||
+		req.OrganizationSlug == "" {
+		response.Error(
+			w,
+			http.StatusBadRequest,
+			"email, password, full_name, organization_name and organization_slug are required",
+		)
 		return
 	}
 
-	existing, err := h.Users.FindByEmail(r.Context(), req.Email)
+	if len(req.Password) < 8 {
+		response.Error(
+			w,
+			http.StatusBadRequest,
+			"password must be at least 8 characters",
+		)
+		return
+	}
+
+	existing, err := h.Users.FindByEmail(
+		r.Context(),
+		req.Email,
+	)
+
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "database error")
+		response.Error(
+			w,
+			http.StatusInternalServerError,
+			"database error",
+		)
 		return
 	}
 
 	if existing != nil {
-		response.Error(w, http.StatusConflict, "email already registered")
+		response.Error(
+			w,
+			http.StatusConflict,
+			"email already registered",
+		)
 		return
 	}
 
-	passwordHash, err := h.Auth.HashPassword(req.Password)
-	if err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	u, err := h.Users.CreateUser(
-		r.Context(),
-		req.Email,
-		passwordHash,
-		req.FullName,
+	passwordHash, err := h.Auth.HashPassword(
+		req.Password,
 	)
+
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to create user")
+		response.Error(
+			w,
+			http.StatusBadRequest,
+			err.Error(),
+		)
+		return
+	}
+
+	u, organizationID, err :=
+		h.Users.CreateUserWithOrganization(
+			r.Context(),
+			req.Email,
+			passwordHash,
+			req.FullName,
+			req.OrganizationName,
+			req.OrganizationSlug,
+		)
+
+	if err != nil {
+		response.Error(
+			w,
+			http.StatusConflict,
+			"failed to create account or organization",
+		)
 		return
 	}
 
@@ -98,6 +151,12 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 				"full_name": u.FullName,
 				"role":      u.Role,
 				"is_active": u.IsActive,
+			},
+			"organization": map[string]interface{}{
+				"id":   organizationID,
+				"name": req.OrganizationName,
+				"slug": req.OrganizationSlug,
+				"role": "owner",
 			},
 		},
 	)
@@ -113,24 +172,42 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
-	u, err := h.Users.FindByEmail(r.Context(), req.Email)
+	u, err := h.Users.FindByEmail(
+		r.Context(),
+		req.Email,
+	)
+
 	if err != nil || u == nil {
-		response.Error(w, http.StatusUnauthorized, "invalid email or password")
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"invalid email or password",
+		)
 		return
 	}
 
 	if !u.IsActive {
-		response.Error(w, http.StatusForbidden, "user account is inactive")
+		response.Error(
+			w,
+			http.StatusForbidden,
+			"user account is inactive",
+		)
 		return
 	}
 
-	if !h.Auth.CheckPassword(u.PasswordHash, req.Password) {
-		response.Error(w, http.StatusUnauthorized, "invalid email or password")
+	if !h.Auth.CheckPassword(
+		u.PasswordHash,
+		req.Password,
+	) {
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"invalid email or password",
+		)
 		return
 	}
 
 	accessTTL := 24 * time.Hour
-	refreshTTL := 30 * 24 * time.Hour
 
 	accessToken, err := h.Auth.GenerateToken(
 		u.ID,
@@ -139,22 +216,31 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		"access",
 		accessTTL,
 	)
+
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to generate access token")
+		response.Error(
+			w,
+			http.StatusInternalServerError,
+			"failed to generate access token",
+		)
 		return
 	}
 
-	// Refresh token sadece Redis session sistemi tarafından üretilir.
-	// JWT refresh token ile Redis random token karıştırılmamalıdır.
-	refreshToken, _, err := h.Sessions.CreateSession(
-		r.Context(),
-		u.ID,
-		u.Email,
-		u.FullName,
-		u.Role,
-	)
+	refreshToken, _, err :=
+		h.Sessions.CreateSession(
+			r.Context(),
+			u.ID,
+			u.Email,
+			u.FullName,
+			u.Role,
+		)
+
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to create session")
+		response.Error(
+			w,
+			http.StatusInternalServerError,
+			"failed to create session",
+		)
 		return
 	}
 
@@ -162,11 +248,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		w,
 		http.StatusOK,
 		map[string]interface{}{
-			"access_token":       accessToken,
-			"refresh_token":      refreshToken,
-			"token_type":         "Bearer",
-			"expires_in":         int(accessTTL.Seconds()),
-			"refresh_expires_in": int(refreshTTL.Seconds()),
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"token_type":    "Bearer",
+			"expires_in":    int(accessTTL.Seconds()),
 			"user": map[string]interface{}{
 				"id":        u.ID,
 				"email":     u.Email,
@@ -189,7 +274,11 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	req.RefreshToken = strings.TrimSpace(req.RefreshToken)
 
 	if req.RefreshToken == "" {
-		response.Error(w, http.StatusBadRequest, "refresh token is required")
+		response.Error(
+			w,
+			http.StatusBadRequest,
+			"refresh token is required",
+		)
 		return
 	}
 
@@ -197,6 +286,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		r.Context(),
 		req.RefreshToken,
 	)
+
 	if err != nil {
 		response.Error(
 			w,
@@ -210,6 +300,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		r.Context(),
 		sessionData.UserID,
 	)
+
 	if err != nil || u == nil || !u.IsActive {
 		response.Error(
 			w,
@@ -228,6 +319,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		"access",
 		accessTTL,
 	)
+
 	if err != nil {
 		response.Error(
 			w,
@@ -244,13 +336,6 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 			"access_token": accessToken,
 			"token_type":   "Bearer",
 			"expires_in":   int(accessTTL.Seconds()),
-			"user": map[string]interface{}{
-				"id":        u.ID,
-				"email":     u.Email,
-				"full_name": u.FullName,
-				"role":      u.Role,
-				"is_active": u.IsActive,
-			},
 		},
 	)
 }
@@ -280,7 +365,11 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	claims := authmiddleware.GetClaims(r)
 
 	if claims == nil {
-		response.Error(w, http.StatusUnauthorized, "unauthorized")
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+		)
 		return
 	}
 
@@ -288,8 +377,13 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		r.Context(),
 		claims.UserID,
 	)
+
 	if err != nil || u == nil {
-		response.Error(w, http.StatusUnauthorized, "user not found")
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"user not found",
+		)
 		return
 	}
 
@@ -307,3 +401,5 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 }
+
+var _ = errors.New

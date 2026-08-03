@@ -2,13 +2,21 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	authmiddleware "enterprise-core/api/internal/auth/middleware"
 	"enterprise-core/api/internal/auth/repository"
 	"enterprise-core/api/internal/response"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+)
+
+var (
+	ErrCannotDeleteSelf     = errors.New("cannot delete current admin user")
+	ErrCannotDeactivateSelf = errors.New("cannot deactivate current admin user")
 )
 
 type Handler struct {
@@ -22,10 +30,13 @@ func NewHandler(users *repository.Repository) *Handler {
 }
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
-	claims := authmiddleware.GetClaims(r)
-
-	if claims == nil {
-		response.Error(w, http.StatusUnauthorized, "unauthorized")
+	claims, ok := authmiddleware.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+		)
 		return
 	}
 
@@ -52,18 +63,33 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.JSON(w, http.StatusOK, users)
+	response.JSON(
+		w,
+		http.StatusOK,
+		users,
+	)
 }
 
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id, ok := parseUserID(w, r)
+	if !ok {
+		return
+	}
 
 	user, err := h.Users.FindByID(
 		r.Context(),
-		id,
+		id.String(),
 	)
+	if err != nil {
+		response.Error(
+			w,
+			http.StatusInternalServerError,
+			"failed to retrieve user",
+		)
+		return
+	}
 
-	if err != nil || user == nil {
+	if user == nil {
 		response.Error(
 			w,
 			http.StatusNotFound,
@@ -72,20 +98,51 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.JSON(w, http.StatusOK, user)
+	response.JSON(
+		w,
+		http.StatusOK,
+		user,
+	)
 }
 
 func (h *Handler) SetUserActive(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	id := chi.URLParam(r, "id")
-
-	var req struct {
-		Active bool `json:"active"`
+	targetID, ok := parseUserID(w, r)
+	if !ok {
+		return
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	claims, ok := authmiddleware.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+		)
+		return
+	}
+
+	currentUserID, err := uuid.Parse(
+		strings.TrimSpace(claims.UserID),
+	)
+	if err != nil {
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"invalid authenticated user",
+		)
+		return
+	}
+
+	var req struct {
+		Active *bool `json:"active"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+
+	if err := decoder.Decode(&req); err != nil {
 		response.Error(
 			w,
 			http.StatusBadRequest,
@@ -94,11 +151,38 @@ func (h *Handler) SetUserActive(
 		return
 	}
 
+	if req.Active == nil {
+		response.Error(
+			w,
+			http.StatusBadRequest,
+			"active field is required",
+		)
+		return
+	}
+
+	if currentUserID == targetID && !*req.Active {
+		response.Error(
+			w,
+			http.StatusConflict,
+			"cannot deactivate your own admin account",
+		)
+		return
+	}
+
 	if err := h.Users.SetActive(
 		r.Context(),
-		id,
-		req.Active,
+		targetID.String(),
+		*req.Active,
 	); err != nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			response.Error(
+				w,
+				http.StatusNotFound,
+				"user not found",
+			)
+			return
+		}
+
 		response.Error(
 			w,
 			http.StatusInternalServerError,
@@ -112,8 +196,8 @@ func (h *Handler) SetUserActive(
 		http.StatusOK,
 		map[string]interface{}{
 			"status":  "ok",
-			"user_id": id,
-			"active":  req.Active,
+			"user_id": targetID.String(),
+			"active":  *req.Active,
 		},
 	)
 }
@@ -122,12 +206,55 @@ func (h *Handler) DeleteUser(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	id := chi.URLParam(r, "id")
+	targetID, ok := parseUserID(w, r)
+	if !ok {
+		return
+	}
+
+	claims, ok := authmiddleware.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+		)
+		return
+	}
+
+	currentUserID, err := uuid.Parse(
+		strings.TrimSpace(claims.UserID),
+	)
+	if err != nil {
+		response.Error(
+			w,
+			http.StatusUnauthorized,
+			"invalid authenticated user",
+		)
+		return
+	}
+
+	if currentUserID == targetID {
+		response.Error(
+			w,
+			http.StatusConflict,
+			"cannot delete your own admin account",
+		)
+		return
+	}
 
 	if err := h.Users.DeleteUser(
 		r.Context(),
-		id,
+		targetID.String(),
 	); err != nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			response.Error(
+				w,
+				http.StatusNotFound,
+				"user not found",
+			)
+			return
+		}
+
 		response.Error(
 			w,
 			http.StatusInternalServerError,
@@ -136,12 +263,35 @@ func (h *Handler) DeleteUser(
 		return
 	}
 
-	response.JSON(
-		w,
-		http.StatusOK,
-		map[string]interface{}{
-			"status":  "ok",
-			"user_id": id,
-		},
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func parseUserID(
+	w http.ResponseWriter,
+	r *http.Request,
+) (uuid.UUID, bool) {
+	rawID := strings.TrimSpace(
+		chi.URLParam(r, "id"),
 	)
+
+	if rawID == "" {
+		response.Error(
+			w,
+			http.StatusBadRequest,
+			"user id is required",
+		)
+		return uuid.Nil, false
+	}
+
+	id, err := uuid.Parse(rawID)
+	if err != nil {
+		response.Error(
+			w,
+			http.StatusBadRequest,
+			"invalid user id",
+		)
+		return uuid.Nil, false
+	}
+
+	return id, true
 }
