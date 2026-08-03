@@ -3,20 +3,20 @@ package http
 import (
 	"net/http"
 
-	"enterprise-core/api/internal/admin"
-	auth "enterprise-core/api/internal/auth"
-	authmiddleware "enterprise-core/api/internal/auth/middleware"
-	"enterprise-core/api/internal/health"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+
+	authhandler "enterprise-core/api/internal/auth/handler"
+	authmiddleware "enterprise-core/api/internal/auth/middleware"
+	"enterprise-core/api/internal/auth/token"
+	"enterprise-core/api/internal/health"
 )
 
 func NewRouter(
 	healthHandler health.Handler,
-	authHandler *auth.Handler,
-	adminHandler *admin.Handler,
-	tokenValidator authmiddleware.TokenValidator,
+	authHandler *authhandler.AuthHandler,
+	adminHandler *authhandler.AdminHandler,
+	tokenManager *token.Manager,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -77,10 +77,18 @@ func NewRouter(
 			)
 
 			r.With(
-				authmiddleware.JWTAuth(tokenValidator),
+				authmiddleware.JWTAuth(tokenManager),
 			).Get(
 				"/me",
 				authHandler.Me,
+			)
+
+			r.With(
+				authmiddleware.JWTAuth(tokenManager),
+				authmiddleware.RequireRole("admin"),
+			).Get(
+				"/admin/me",
+				authHandler.AdminMe,
 			)
 		},
 	)
@@ -89,13 +97,8 @@ func NewRouter(
 		"/admin",
 		func(r chi.Router) {
 			r.Use(
-				authmiddleware.JWTAuth(tokenValidator),
+				authmiddleware.JWTAuth(tokenManager),
 				authmiddleware.RequireRole("admin"),
-			)
-
-			r.Get(
-				"/me",
-				adminHandler.Me,
 			)
 
 			r.Get(

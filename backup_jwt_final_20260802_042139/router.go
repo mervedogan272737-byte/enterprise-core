@@ -3,8 +3,8 @@ package http
 import (
 	"net/http"
 
-	"enterprise-core/api/internal/admin"
-	auth "enterprise-core/api/internal/auth"
+	authservice "enterprise-core/api/internal/auth"
+	authhandler "enterprise-core/api/internal/auth/handler"
 	authmiddleware "enterprise-core/api/internal/auth/middleware"
 	"enterprise-core/api/internal/health"
 
@@ -14,9 +14,9 @@ import (
 
 func NewRouter(
 	healthHandler health.Handler,
-	authHandler *auth.Handler,
-	adminHandler *admin.Handler,
-	tokenValidator authmiddleware.TokenValidator,
+	authHandler *authhandler.AuthHandler,
+	adminHandler *authhandler.AdminHandler,
+	authService *authservice.Service,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -77,10 +77,18 @@ func NewRouter(
 			)
 
 			r.With(
-				authmiddleware.JWTAuth(tokenValidator),
+				authmiddleware.JWTAuth(authService),
 			).Get(
 				"/me",
 				authHandler.Me,
+			)
+
+			r.With(
+				authmiddleware.JWTAuth(authService),
+				authmiddleware.RequireRole("admin"),
+			).Get(
+				"/admin/me",
+				authHandler.AdminMe,
 			)
 		},
 	)
@@ -89,13 +97,8 @@ func NewRouter(
 		"/admin",
 		func(r chi.Router) {
 			r.Use(
-				authmiddleware.JWTAuth(tokenValidator),
+				authmiddleware.JWTAuth(authService),
 				authmiddleware.RequireRole("admin"),
-			)
-
-			r.Get(
-				"/me",
-				adminHandler.Me,
 			)
 
 			r.Get(

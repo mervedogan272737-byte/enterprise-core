@@ -1,84 +1,54 @@
-services:
+﻿services:
   postgres:
-    image: postgres:17
     container_name: enterprise-postgres
-    restart: unless-stopped
-
+    image: postgres:17
     environment:
+      POSTGRES_DB: enterprise_db
       POSTGRES_USER: enterprise_user
       POSTGRES_PASSWORD: enterprise_password
-      POSTGRES_DB: enterprise_db
-
     ports:
       - "5432:5432"
-
     volumes:
-      - enterprise_postgres_data:/var/lib/postgresql/data
-
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U enterprise_user -d enterprise_db"
-        ]
-      interval: 5s
+        - CMD-SHELL
+        - pg_isready -U enterprise_user -d enterprise_db
       timeout: 5s
+      interval: 5s
       retries: 10
 
   redis:
-    image: redis:8-alpine
     container_name: enterprise-redis
-    restart: unless-stopped
-
-    volumes:
-      - enterprise_redis_data:/data
-
+    image: redis:8
     healthcheck:
       test:
-        [
-          "CMD",
-          "redis-cli",
-          "ping"
-        ]
-      interval: 5s
+        - CMD
+        - redis-cli
+        - ping
       timeout: 5s
+      interval: 5s
       retries: 10
 
   api:
-    image: golang:1.26-alpine
     container_name: enterprise-api
-    restart: unless-stopped
-
-    working_dir: /app
-
-    volumes:
-      - ./apps/api:/app
-
-    environment:
-      APP_ENV: development
-      API_PORT: 8080
-
-      DATABASE_URL: postgres://enterprise_user:enterprise_password@postgres:5432/enterprise_db?sslmode=disable
-
-      REDIS_URL: redis://redis:6379
-
-      CORS_ORIGINS: http://localhost:3000
-
-      JWT_SECRET: enterprise-core-dev-secret-change-this-before-production
-      JWT_ACCESS_TOKEN_TTL_MINUTES: 1440
-      JWT_REFRESH_TOKEN_TTL_DAYS: 30
-
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
     ports:
       - "8080:8080"
-
+    environment:
+      APP_ENV: development
+      API_PORT: "8080"
+      DATABASE_URL: postgres://enterprise_user:enterprise_password@enterprise-postgres:5432/enterprise_db?sslmode=disable
+      REDIS_URL: redis://enterprise-redis:6379
+      JWT_SECRET: enterprise-core-super-secret-change-this
+      CORS_ORIGINS: http://localhost:3000
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
 
-    command: sh -c "go mod tidy && go run ."
-
 volumes:
-  enterprise_postgres_data:
-  enterprise_redis_data:
+  postgres_data:

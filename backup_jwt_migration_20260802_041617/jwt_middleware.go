@@ -5,22 +5,15 @@ import (
 	"net/http"
 	"strings"
 
-	"enterprise-core/api/internal/auth/token"
+	auth "enterprise-core/api/internal/auth"
 )
 
 type contextKey string
 
 const claimsContextKey contextKey = "auth_claims"
 
-type TokenValidator interface {
-	ValidateToken(
-		ctx context.Context,
-		tokenString string,
-	) (*token.Claims, error)
-}
-
 func JWTAuth(
-	tokenValidator TokenValidator,
+	authService *auth.Service,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(
@@ -40,10 +33,15 @@ func JWTAuth(
 				return
 			}
 
-			parts := strings.Fields(authHeader)
+			parts := strings.Fields(
+				authHeader,
+			)
 
 			if len(parts) != 2 ||
-				!strings.EqualFold(parts[0], "Bearer") {
+				!strings.EqualFold(
+					parts[0],
+					"Bearer",
+				) {
 				http.Error(
 					w,
 					"invalid authorization header",
@@ -52,7 +50,9 @@ func JWTAuth(
 				return
 			}
 
-			accessToken := strings.TrimSpace(parts[1])
+			accessToken := strings.TrimSpace(
+				parts[1],
+			)
 
 			if accessToken == "" {
 				http.Error(
@@ -63,7 +63,7 @@ func JWTAuth(
 				return
 			}
 
-			claims, err := tokenValidator.ValidateToken(
+			claims, err := authService.ValidateToken(
 				r.Context(),
 				accessToken,
 			)
@@ -103,7 +103,9 @@ func JWTAuth(
 func RequireRole(
 	requiredRole string,
 ) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
+	return func(
+		next http.Handler,
+	) http.Handler {
 		return http.HandlerFunc(func(
 			w http.ResponseWriter,
 			r *http.Request,
@@ -122,8 +124,12 @@ func RequireRole(
 			}
 
 			if !strings.EqualFold(
-				strings.TrimSpace(claims.Role),
-				strings.TrimSpace(requiredRole),
+				strings.TrimSpace(
+					claims.Role,
+				),
+				strings.TrimSpace(
+					requiredRole,
+				),
 			) {
 				http.Error(
 					w,
@@ -143,10 +149,10 @@ func RequireRole(
 
 func ClaimsFromContext(
 	ctx context.Context,
-) (*token.Claims, bool) {
+) (*auth.Claims, bool) {
 	claims, ok := ctx.Value(
 		claimsContextKey,
-	).(*token.Claims)
+	).(*auth.Claims)
 
 	if !ok || claims == nil {
 		return nil, false
@@ -161,7 +167,7 @@ func ClaimsContextKeyForTest() interface{} {
 
 func GetClaims(
 	r *http.Request,
-) *token.Claims {
+) *auth.Claims {
 	claims, _ := ClaimsFromContext(
 		r.Context(),
 	)

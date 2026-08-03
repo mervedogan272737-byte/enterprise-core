@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"enterprise-core/api/internal/auth/token"
+	authservice "enterprise-core/api/internal/auth"
 )
 
 type contextKey string
@@ -16,7 +16,7 @@ type TokenValidator interface {
 	ValidateToken(
 		ctx context.Context,
 		tokenString string,
-	) (*token.Claims, error)
+	) (*authservice.Claims, error)
 }
 
 func JWTAuth(
@@ -143,10 +143,10 @@ func RequireRole(
 
 func ClaimsFromContext(
 	ctx context.Context,
-) (*token.Claims, bool) {
+) (*authservice.Claims, bool) {
 	claims, ok := ctx.Value(
 		claimsContextKey,
-	).(*token.Claims)
+	).(*authservice.Claims)
 
 	if !ok || claims == nil {
 		return nil, false
@@ -161,7 +161,7 @@ func ClaimsContextKeyForTest() interface{} {
 
 func GetClaims(
 	r *http.Request,
-) *token.Claims {
+) *authservice.Claims {
 	claims, _ := ClaimsFromContext(
 		r.Context(),
 	)

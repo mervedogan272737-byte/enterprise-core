@@ -1,0 +1,33 @@
+﻿ M apps/api/go.mod
+ M apps/api/go.sum
+ D apps/api/internal/auth/handler/auth_handler.go
+ D apps/api/internal/auth/handler/auth_handler_test.go
+ M apps/api/internal/auth/middleware/jwt_middleware.go
+ M apps/api/internal/auth/repository/user_repository.go
+ M apps/api/internal/auth/repository/user_repository_test.go
+ D apps/api/internal/auth/service/auth_service.go
+ D apps/api/internal/auth/service/auth_service_test.go
+ D apps/api/internal/auth/token/jwt.go
+ D apps/api/internal/auth/token/jwt_test.go
+ M apps/api/internal/config/config.go
+ M apps/api/internal/http/router.go
+ D apps/api/internal/http/router_test.go
+ M apps/api/main.go
+ M docker-compose.yml
+?? apps/api/Dockerfile
+?? apps/api/internal/admin/
+?? apps/api/internal/auth/handler.go
+?? apps/api/internal/auth/service.go
+?? apps/api/internal/auth/token/claims.go
+?? apps/api/internal/database/migrations.go
+?? apps/api/internal/response/
+?? apps/web/src/app/admin/
+?? apps/web/src/app/dashboard/
+?? apps/web/src/app/profile/
+?? apps/web/src/app/settings/
+?? backup_jwt_final_20260802_042139/
+?? backup_jwt_migration_20260802_041617/
+?? backups/
+?? enterprise-core-audit-20260802-073331/
+?? go-test-result.txt
+?? internal/

@@ -1,0 +1,81 @@
+﻿package http
+
+import (
+"net/http"
+
+"github.com/go-chi/chi/v5"
+"github.com/go-chi/cors"
+
+auth "enterprise-core/api/internal/auth"
+authmiddleware "enterprise-core/api/internal/auth/middleware"
+"enterprise-core/api/internal/admin"
+"enterprise-core/api/internal/health"
+)
+
+func NewRouter(
+healthHandler health.Handler,
+authHandler *auth.Handler,
+adminHandler *admin.Handler,
+tokenValidator authmiddleware.TokenValidator,
+) http.Handler {
+r := chi.NewRouter()
+
+r.Use(cors.Handler(cors.Options{
+AllowedOrigins: []string{
+"http://localhost:3000",
+"http://127.0.0.1:3000",
+"http://localhost:3001",
+"http://127.0.0.1:3001",
+},
+AllowedMethods: []string{
+"GET",
+"POST",
+"PUT",
+"PATCH",
+"DELETE",
+"OPTIONS",
+},
+AllowedHeaders: []string{
+"Accept",
+"Authorization",
+"Content-Type",
+"X-CSRF-Token",
+},
+ExposedHeaders: []string{
+"Link",
+},
+AllowCredentials: true,
+MaxAge:           300,
+}))
+
+r.Get("/health", healthHandler.All)
+
+r.Route("/auth", func(r chi.Router) {
+r.Post("/register", authHandler.Register)
+r.Post("/login", authHandler.Login)
+r.Post("/refresh", authHandler.Refresh)
+r.Post("/logout", authHandler.Logout)
+
+r.With(
+authmiddleware.JWTAuth(tokenValidator),
+).Get(
+"/me",
+authHandler.Me,
+)
+})
+
+r.Route("/admin", func(r chi.Router) {
+r.Use(
+authmiddleware.JWTAuth(tokenValidator),
+authmiddleware.RequireRole("admin"),
+)
+
+r.Get("/me", adminHandler.Me)
+r.Get("/users", adminHandler.ListUsers)
+r.Get("/users/{id}", adminHandler.GetUser)
+r.Patch("/users/{id}/active", adminHandler.SetUserActive)
+r.Delete("/users/{id}", adminHandler.DeleteUser)
+})
+
+return r
+}
